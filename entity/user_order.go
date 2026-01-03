@@ -7,7 +7,7 @@ import (
 )
 
 type UserOrder struct {
-	ID        uuid.UUID
+	ID        uuid.UUID `json:"omitempty"`
 	UserID    string    `json:"user_id"`
 	ProductID string    `json:"product_id"`
 	Quantity  int       `json:"quantity"`
@@ -17,8 +17,9 @@ type UserOrder struct {
 }
 
 type UserOrderRequest struct {
-	UserID    string `json:"user_id"`
-	ProductID string `json:"product_id"`
-	Quantity  int    `json:"quantity"`
-	Location  string `json:"location"`
+	ID        uuid.UUID `json:"omitempty"`
+	UserID    string    `json:"user_id"`
+	ProductID string    `json:"product_id"`
+	Quantity  int       `json:"quantity"`
+	Location  string    `json:"location"`
 }

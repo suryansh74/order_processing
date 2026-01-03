@@ -10,7 +10,8 @@ import (
 
 type OrderRepository interface {
 	InsertUserOrder(ctx context.Context, userOrder *entity.UserOrder) error
-	// UpdateStatusUserOrder(ctx context.Context, userOrderID string, status entity.Status)
+	InsertPayment(ctx context.Context, payment *entity.Payment) error
+	UpdateStatusUserOrder(ctx context.Context, userOrderID string, status entity.Status) error
 }
 
 type orderRepository struct {
@@ -38,5 +39,24 @@ func (or *orderRepository) InsertUserOrder(ctx context.Context, userOrder *entit
 		userOrder.Status,
 		userOrder.CreatedAt,
 	)
+	return err
+}
+
+func (or *orderRepository) InsertPayment(ctx context.Context, payment *entity.Payment) error {
+	query := `
+        INSERT INTO payments (id, user_order_id, created_at) 
+        VALUES ($1, $2, $3)
+    `
+
+	_, err := or.db.Exec(ctx, query,
+		payment.ID,
+		payment.UserOrderID,
+		payment.CreatedAt,
+	)
+	return err
+}
+
+func (or *orderRepository) UpdateStatusUserOrder(ctx context.Context, userOrderID string, status entity.Status) error {
+	_, err := or.db.Exec(ctx, "update user_orders set status=$1 where id=$2", status, userOrderID)
 	return err
 }

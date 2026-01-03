@@ -13,7 +13,6 @@ import (
 
 	"order_processing/rabbitmq"
 
-	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -58,10 +57,8 @@ func listenUserOrder(ch *amqp.Channel, userQueue amqp.Queue) {
 			rabbitmq.FailOnError(err, "unable to unmarshal user order request")
 
 			var userOrder entity.UserOrder
-			userOrder.ID, err = uuid.NewV7()
-			if err != nil {
-				panic(err)
-			}
+			log.Println("user order id in create service", userOrderRequest.ID)
+			userOrder.ID = userOrderRequest.ID
 			userOrder.UserID = userOrderRequest.UserID
 			userOrder.ProductID = userOrderRequest.ProductID
 			userOrder.CreatedAt = time.Now()
@@ -75,6 +72,7 @@ func listenUserOrder(ch *amqp.Channel, userQueue amqp.Queue) {
 			if err != nil {
 				panic(err)
 			}
+			log.Println("user order created successful")
 		}
 	}()
 
