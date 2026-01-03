@@ -4,7 +4,7 @@ const (
 	// exhange
 	ExchangeUserOrderDirect = "exchange_user_order_direct"
 	ExchangePaymentDirect   = "exhange_payment_direct"
-	ExchangeDLQ             = "exchange_dlq"
+	ExchangeDLX             = "exchange_dlx"
 	ExchangeStockBroadcast  = "exchange_stock_broadcast"
 
 	// routing key
@@ -25,4 +25,8 @@ const (
 	Host     = "serverhost"
 	Port     = "5432"
 	DBName   = "order_processing_db"
+
+	// other
+	MaxRetries        = 3
+	RetryDelaySeconds = 5
 )
