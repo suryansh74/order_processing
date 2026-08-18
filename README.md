@@ -44,3 +44,27 @@ deploy/        # Prometheus + Grafana provisioning
 ## License
 
 MIT
+
+## Free ports before docker compose
+
+```bash
+# Stop previous stack
+docker compose down
+
+# Free host ports used by this project (Linux)
+sudo fuser -k 8001/tcp 2>/dev/null || true
+sudo fuser -k 5672/tcp 2>/dev/null || true
+sudo fuser -k 15672/tcp 2>/dev/null || true
+sudo fuser -k 9091/tcp 2>/dev/null || true
+sudo fuser -k 3001/tcp 2>/dev/null || true
+
+docker compose up -d --build
+```
+
+| Service | Host port |
+|---------|-----------|
+| API | 8001 |
+| RabbitMQ AMQP | 5672 |
+| RabbitMQ UI | 15672 |
+| Prometheus | 9091 |
+| Grafana | 3001 |
