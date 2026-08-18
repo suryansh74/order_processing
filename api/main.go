@@ -4,17 +4,35 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"strconv"
 	"time"
 
 	"order_processing/constants"
 	"order_processing/entity"
-
 	"order_processing/rabbitmq"
 
-	"github.com/google/uuid"
-	amqp "github.com/rabbitmq/amqp091-go"
-
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/adaptor"
+	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	amqp "github.com/rabbitmq/amqp091-go"
+)
+
+var (
+	ordersTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "orders_submitted_total",
+		Help: "Total orders submitted via API",
+	})
+	publishTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "rabbitmq_publish_total",
+		Help: "Messages published to RabbitMQ",
+	}, []string{"exchange", "status"})
+	httpRequests = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "http_requests_total",
+		Help: "HTTP requests",
+	}, []string{"method", "path", "status"})
 )
 
 func main() {
@@ -23,59 +41,53 @@ func main() {
 	ch := rabbitmq.GetChannel(conn)
 	defer ch.Close()
 
-	// make exchange user order
 	err := ch.ExchangeDeclare(constants.ExchangeUserOrderDirect, "direct", true, false, false, false, nil)
 	rabbitmq.FailOnError(err, "can't create exchange user order")
 
-	// make exchange payment
 	err = ch.ExchangeDeclare(constants.ExchangePaymentDirect, "direct", true, false, false, false, nil)
 	rabbitmq.FailOnError(err, "can't create exchange payment")
 
-	// // make exchange stock
-	// err = ch.ExchangeDeclare(constants.ExchangeStockBroadcast, "fanout", true, false, false, false, nil)
-	// rabbitmq.FailOnError(err, "can't create exchange stock")
-
 	app := fiber.New()
+
+	app.Use(func(c *fiber.Ctx) error {
+		err := c.Next()
+		httpRequests.WithLabelValues(c.Method(), c.Path(), strconv.Itoa(c.Response().StatusCode())).Inc()
+		return err
+	})
+
+	app.Get("/metrics", adaptor.HTTPHandler(promhttp.Handler()))
+	app.Get("/health", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"status": "ok"})
+	})
 	app.Post("/order", handleOrder(ch))
 
-	app.Listen("localhost:8000")
+	log.Println("API listening on :8000")
+	app.Listen("0.0.0.0:8000")
 }
 
 func handleOrder(ch *amqp.Channel) fiber.Handler {
 	return func(ctx *fiber.Ctx) error {
-		// get incoming order request
 		var userOrderRequest entity.UserOrderRequest
-		err := ctx.BodyParser(&userOrderRequest)
-		if err != nil {
-			return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"error": "invalid json",
-			})
+		if err := ctx.BodyParser(&userOrderRequest); err != nil {
+			return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid json"})
 		}
 
-		// publish to rabbitmq
 		userOrderID, err := uuid.NewV7()
 		if err != nil {
-			panic(err)
+			return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "id generation failed"})
 		}
 
-		// create user order id and passing it to create user order and payment
 		userOrderRequest.ID = userOrderID
 		body, err := json.Marshal(userOrderRequest)
-		rabbitmq.FailOnError(err, "unable to marshalling data")
+		if err != nil {
+			return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "marshal failed"})
+		}
 
-		// create order
 		go CreateOrder(ch, body)
-
-		// add payment
 		go AddPayment(ch, userOrderID.String())
 
-		// // update stock
-		// go UpdateStock(ch, reqCtx, body)
-
-		// return response back to client
-		return ctx.Status(fiber.StatusAccepted).JSON(fiber.Map{
-			"message": "user order created",
-		})
+		ordersTotal.Inc()
+		return ctx.Status(fiber.StatusAccepted).JSON(fiber.Map{"message": "user order created", "id": userOrderID.String()})
 	}
 }
 
@@ -85,15 +97,18 @@ func CreateOrder(ch *amqp.Channel, body []byte) {
 	err := ch.PublishWithContext(reqCtx,
 		constants.ExchangeUserOrderDirect,
 		constants.RoutingKeyUserOrder,
-		false, // mandatory
-		false, // immediate
+		false, false,
 		amqp.Publishing{
 			ContentType:  "application/json",
-			Body:         []byte(body),
+			Body:         body,
 			DeliveryMode: amqp.Persistent,
 		})
-	rabbitmq.FailOnError(err, "Failed to publish a message")
-
+	if err != nil {
+		publishTotal.WithLabelValues(constants.ExchangeUserOrderDirect, "error").Inc()
+		log.Printf("Create Order publish error: %v", err)
+		return
+	}
+	publishTotal.WithLabelValues(constants.ExchangeUserOrderDirect, "ok").Inc()
 	log.Printf("Create Order: [x] Sent %s", body)
 }
 
@@ -102,35 +117,23 @@ func AddPayment(ch *amqp.Channel, userOrderID string) {
 	defer cancel()
 	body, err := json.Marshal(userOrderID)
 	if err != nil {
-		panic(err)
+		log.Printf("Add Payment marshal error: %v", err)
+		return
 	}
 	err = ch.PublishWithContext(reqCtx,
 		constants.ExchangePaymentDirect,
 		constants.RoutingKeyPayment,
-		false, // mandatory
-		false, // immediate
+		false, false,
 		amqp.Publishing{
 			ContentType:  "application/json",
-			Body:         []byte(body),
+			Body:         body,
 			DeliveryMode: amqp.Persistent,
 		})
-	rabbitmq.FailOnError(err, "Failed to publish a message")
-
+	if err != nil {
+		publishTotal.WithLabelValues(constants.ExchangePaymentDirect, "error").Inc()
+		log.Printf("Add Payment publish error: %v", err)
+		return
+	}
+	publishTotal.WithLabelValues(constants.ExchangePaymentDirect, "ok").Inc()
 	log.Printf("Add Payment: [x] Sent %s", body)
-}
-
-func UpdateStock(ch *amqp.Channel, reqCtx context.Context, body []byte) {
-	err := ch.PublishWithContext(reqCtx,
-		constants.ExchangeStockBroadcast,
-		"",
-		false, // mandatory
-		false, // immediate
-		amqp.Publishing{
-			ContentType:  "application/json",
-			Body:         []byte(body),
-			DeliveryMode: amqp.Persistent,
-		})
-	rabbitmq.FailOnError(err, "Failed to publish a message")
-
-	log.Printf("Update Stock: [x] Sent %s", body)
 }
